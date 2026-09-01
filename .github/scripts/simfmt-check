@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+say() {
+  printf 'simfmt-check: %s\n' "$1"
+}
+
+err() {
+  say "$1" >&2
+  exit 1
+}
+
+need_cmd() {
+  if ! check_cmd "$1"; then
+    err "need '$1' (command not found)"
+  fi
+}
+
+check_cmd() {
+  command -v "$1" &>/dev/null
+}
+
+usage() {
+  cat >&2 <<EOF
+Usage:
+  $(basename "$0") -all [-d <directory>] [--check]
+  $(basename "$0") -f <file> [--check]
+
+Options:
+  -all, --all             Format every .simf file recursively. Defaults to the
+                          current directory.
+  -d, --directory <dir>   Directory to search with -all or --all.
+  -f, --file <file>       Format exactly one file.
+  --check                 Pass --check to simfmt without modifying files.
+  -h, --help              Show this help text.
+
+Set SIMFMT_BIN to use a simfmt executable other than the one on PATH.
+EOF
+  exit 2
+}
+
+require_value() {
+  local option="$1"
+  local value="${2:-}"
+
+  if [ -z "$value" ]; then
+    err "${option} requires an argument"
+  fi
+}
+
+main() {
+  local format_all=false
+  local check=false
+  local directory="$PWD"
+  local file=''
+  local simfmt_bin="${SIMFMT_BIN:-simfmt}"
+  local -a simfmt_args=()
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -all|--all)
+        format_all=true
+        ;;
+      -d|--directory)
+        require_value "$1" "${2:-}"
+        directory="$2"
+        shift
+        ;;
+      -f|--file)
+        require_value "$1" "${2:-}"
+        file="$2"
+        shift
+        ;;
+      --check)
+        check=true
+        ;;
+      -h|--help)
+        usage
+        ;;
+      *)
+        err "unknown option: $1"
+        ;;
+    esac
+    shift
+  done
+
+  if [ "$format_all" = true ] && [ -n "$file" ]; then
+    err 'use either -all or -f, not both'
+  fi
+
+  if [ "$format_all" = false ] && [ "$directory" != "$PWD" ]; then
+    err '-d requires -all'
+  fi
+
+  if [ "$format_all" = false ] && [ -z "$file" ]; then
+    usage
+  fi
+
+  need_cmd "$simfmt_bin"
+
+  if [ "$check" = true ]; then
+    simfmt_args+=(--check)
+  fi
+
+  if [ "$format_all" = true ]; then
+    [ -d "$directory" ] || err "no such directory: $directory"
+    say "Formatting .simf files under $directory"
+    find "$directory" -type f -name '*.simf' -exec "$simfmt_bin" "${simfmt_args[@]}" -- '{}' +
+    return
+  fi
+
+  [ -f "$file" ] || err "no such file: $file"
+  if [[ "$file" != *.simf ]]; then
+    say "warning: $file is not a .simf file"
+  fi
+  "$simfmt_bin" "${simfmt_args[@]}" -- "$file"
+}
+
+main "$@"
