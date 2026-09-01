@@ -1,0 +1,6 @@
+# IDE/editors (optional but common minimal)
+**/.DS_Store
+.idea/
+.vscode/
+.cache
+.env

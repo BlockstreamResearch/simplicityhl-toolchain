@@ -1,0 +1,380 @@
+name: Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+      - dev
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Shell checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check Bash syntax
+        shell: bash
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          bash -n install .github/scripts/simfmt-check
+
+      - name: Install ShellCheck when unavailable
+        shell: bash
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          if command -v shellcheck >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          if command -v sudo >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install --yes shellcheck
+          else
+            apt-get update
+            apt-get install --yes shellcheck
+          fi
+
+      - name: Run ShellCheck
+        shell: bash
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          shellcheck install .github/scripts/simfmt-check
+
+  versions:
+    name: Resolve released versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      simplex: ${{ steps.versions.outputs.simplex }}
+      simfmt: ${{ steps.versions.outputs.simfmt }}
+      simfmt-available: ${{ steps.versions.outputs.simfmt-available }}
+    steps:
+      - id: versions
+        name: Resolve latest releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          api_args=(
+            --fail
+            --silent
+            --show-error
+            --location
+            --proto '=https'
+            --tlsv1.2
+            --header 'Accept: application/vnd.github+json'
+            --header 'X-GitHub-Api-Version: 2022-11-28'
+          )
+
+          if [ -n "$GH_TOKEN" ]; then
+            api_args+=(--header "Authorization: Bearer $GH_TOKEN")
+          fi
+
+          simplex_json="$(curl "${api_args[@]}" https://api.github.com/repos/BlockstreamResearch/smplx/releases/latest)"
+          simplex_tag="$(jq -er '.tag_name | strings | select(length > 0)' <<< "$simplex_json")"
+          printf 'simplex=%s\n' "${simplex_tag#v}" >> "$GITHUB_OUTPUT"
+
+          if simfmt_json="$(curl "${api_args[@]}" https://api.github.com/repos/BlockstreamResearch/simfmt/releases/latest 2>/dev/null)" &&
+            simfmt_tag="$(jq -er 'select((.assets | length) > 0) | .tag_name | strings | select(length > 0)' <<< "$simfmt_json")"; then
+            printf 'simfmt=%s\n' "${simfmt_tag#v}" >> "$GITHUB_OUTPUT"
+            printf 'simfmt-available=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'simfmt=\n' >> "$GITHUB_OUTPUT"
+            printf 'simfmt-available=false\n' >> "$GITHUB_OUTPUT"
+            printf 'simfmt has no precompiled GitHub release yet; simfmt jobs will be skipped.\n'
+          fi
+
+  install-simplex:
+    name: Install Simplex (${{ matrix.os }}, ${{ matrix.mode }})
+    needs: versions
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        mode:
+          - latest
+          - explicit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: selection
+        name: Select component version
+        shell: bash
+        env:
+          MODE: ${{ matrix.mode }}
+          SIMPLEX_VERSION: ${{ needs.versions.outputs.simplex }}
+        run: |
+          if [ "$MODE" = explicit ]; then
+            printf 'components=simplex@%s\n' "$SIMPLEX_VERSION" >> "$GITHUB_OUTPUT"
+          else
+            printf 'components=simplex\n' >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: toolchain
+        name: Install Simplex with the local action
+        uses: ./
+        with:
+          components: ${{ steps.selection.outputs.components }}
+
+      - name: Verify Simplex installation
+        shell: bash
+        env:
+          INSTALLED_VERSION: ${{ steps.toolchain.outputs.simplex-version }}
+          SIMFMT_VERSION: ${{ steps.toolchain.outputs.simfmt-version }}
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          test -n "$INSTALLED_VERSION"
+          test -z "$SIMFMT_VERSION"
+          simplex --version | grep --fixed-strings "$INSTALLED_VERSION"
+
+  install-simfmt:
+    name: Install simfmt (${{ matrix.os }}, ${{ matrix.mode }})
+    needs: versions
+    if: needs.versions.outputs.simfmt-available == 'true'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        mode:
+          - latest
+          - explicit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: selection
+        name: Select component version
+        shell: bash
+        env:
+          MODE: ${{ matrix.mode }}
+          SIMFMT_VERSION: ${{ needs.versions.outputs.simfmt }}
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          if [ "$MODE" = explicit ]; then
+            printf 'components=simfmt@%s\n' "$SIMFMT_VERSION" >> "$GITHUB_OUTPUT"
+          else
+            printf 'components=simfmt\n' >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: toolchain
+        name: Install simfmt with the local action
+        uses: ./
+        with:
+          components: ${{ steps.selection.outputs.components }}
+
+      - name: Verify simfmt installation
+        shell: bash
+        env:
+          INSTALLED_VERSION: ${{ steps.toolchain.outputs.simfmt-version }}
+          SIMPLEX_VERSION: ${{ steps.toolchain.outputs.simplex-version }}
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          test -n "$INSTALLED_VERSION"
+          test -z "$SIMPLEX_VERSION"
+          simfmt --version | grep --fixed-strings "$INSTALLED_VERSION"
+
+  fixture:
+    name: Example project
+    needs: versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Install the project Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91.0"
+
+      - name: Record Rust and Cargo versions
+        shell: bash
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          rustc --version > "$RUNNER_TEMP/rustc-before"
+          cargo --version > "$RUNNER_TEMP/cargo-before"
+
+      - id: toolchain
+        name: Install Simplex with the local action
+        uses: ./
+        with:
+          components: simplex@${{ needs.versions.outputs.simplex }}
+
+      - name: Verify Rust and Cargo were not changed
+        shell: bash
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          test "$(cat "$RUNNER_TEMP/rustc-before")" = "$(rustc --version)"
+          test "$(cat "$RUNNER_TEMP/cargo-before")" = "$(cargo --version)"
+
+      - name: Generate contract artifacts
+        working-directory: example
+        run: simplex build
+
+      - name: Build
+        working-directory: example
+        run: cargo build --locked --all-features
+
+      - name: Run Simplex tests
+        working-directory: example
+        run: simplex test -v
+
+  formatting:
+    name: SimplicityHL formatting
+    needs: versions
+    if: needs.versions.outputs.simfmt-available == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: toolchain
+        name: Install all components with the local action
+        uses: ./
+        with:
+          components: simplex@${{ needs.versions.outputs.simplex }},simfmt@${{ needs.versions.outputs.simfmt }}
+
+      - name: Check action outputs
+        shell: bash
+        env:
+          SIMPLEX_VERSION: ${{ steps.toolchain.outputs.simplex-version }}
+          SIMFMT_VERSION: ${{ steps.toolchain.outputs.simfmt-version }}
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          test -n "$SIMPLEX_VERSION"
+          test -n "$SIMFMT_VERSION"
+
+      - name: Check SimplicityHL formatting
+        shell: bash
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          .github/scripts/simfmt-check -all -d "$GITHUB_WORKSPACE" --check
+
+  invalid-inputs:
+    name: Invalid input handling
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: missing
+        name: Reject empty components
+        continue-on-error: true
+        uses: ./
+        with:
+          components: ""
+
+      - id: unknown
+        name: Reject an unknown component
+        continue-on-error: true
+        uses: ./
+        with:
+          components: unknown
+
+      - id: duplicate
+        name: Reject a duplicate component
+        continue-on-error: true
+        uses: ./
+        with:
+          components: simplex,simplex
+
+      - id: malformed
+        name: Reject a malformed version
+        continue-on-error: true
+        uses: ./
+        with:
+          components: simplex@
+
+      - id: nonexistent
+        name: Reject a nonexistent release
+        continue-on-error: true
+        uses: ./
+        with:
+          components: simplex@0.0.0-does-not-exist
+
+      - name: Verify every invalid input failed
+        if: always()
+        shell: bash
+        env:
+          MISSING: ${{ steps.missing.outcome }}
+          UNKNOWN: ${{ steps.unknown.outcome }}
+          DUPLICATE: ${{ steps.duplicate.outcome }}
+          MALFORMED: ${{ steps.malformed.outcome }}
+          NONEXISTENT: ${{ steps.nonexistent.outcome }}
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          test "$MISSING" = failure
+          test "$UNKNOWN" = failure
+          test "$DUPLICATE" = failure
+          test "$MALFORMED" = failure
+          test "$NONEXISTENT" = failure

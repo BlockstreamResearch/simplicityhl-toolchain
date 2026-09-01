@@ -1,0 +1,292 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+say() {
+  printf 'simplicityhl-toolchain: %s\n' "$1"
+}
+
+err() {
+  say "$1" >&2
+  exit 1
+}
+
+check_cmd() {
+  command -v "$1" &>/dev/null
+}
+
+need_cmd() {
+  if ! check_cmd "$1"; then
+    err "need '$1' (command not found)"
+  fi
+}
+
+trim() {
+  local value="$1"
+
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s\n' "$value"
+}
+
+validate_version() {
+  local component="$1"
+  local version="$2"
+
+  if [[ ! "$version" =~ ^v?[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
+    err "invalid version for '$component': '$version'"
+  fi
+}
+
+append_path() {
+  local bin_dir="$1"
+
+  export PATH="$bin_dir:$PATH"
+  if [ -n "${GITHUB_PATH:-}" ]; then
+    printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+  fi
+}
+
+write_key_value_out() {
+  local name="$1"
+  local value="$2"
+
+  if [ -z "${GITHUB_OUTPUT:-}" ]; then
+    err 'GITHUB_OUTPUT is not set'
+  fi
+  printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
+}
+
+reported_version() {
+  local component="$1"
+  local version_output="$2"
+
+  if [[ "$version_output" =~ v?([0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return
+  fi
+
+  err "could not determine the installed $component version from: $version_output"
+}
+
+github_api() {
+  local url="$1"
+  local -a args=(
+    --fail
+    --silent
+    --show-error
+    --location
+    --retry 10
+    --retry-all-errors
+    --retry-delay 1
+    --proto '=https'
+    --tlsv1.2
+    --header 'Accept: application/vnd.github+json'
+    --header 'X-GitHub-Api-Version: 2022-11-28'
+  )
+
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    args+=(--header "Authorization: Bearer $GITHUB_TOKEN")
+  fi
+
+  curl "${args[@]}" "$url"
+}
+
+resolve_simplex_tag() {
+  local requested_version="$1"
+  local release_json
+  local tag
+
+  if [ -n "$requested_version" ]; then
+    if [[ "$requested_version" == v* ]]; then
+      printf '%s\n' "$requested_version"
+    else
+      printf 'v%s\n' "$requested_version"
+    fi
+    return
+  fi
+
+  say 'resolving the latest Simplex release' >&2
+  release_json="$(github_api 'https://api.github.com/repos/BlockstreamResearch/smplx/releases/latest')" || \
+    err 'failed to resolve the latest Simplex release'
+  tag="$(jq -er '.tag_name | strings | select(length > 0)' <<< "$release_json")" || \
+    err 'the latest Simplex release does not contain a tag name'
+  printf '%s\n' "$tag"
+}
+
+install_simplex() {
+  local requested_version="$1"
+  local output_variable="$2"
+  local tag
+  local base_dir
+  local simplex_dir
+  local simplex_bin_dir
+  local version_output
+  local installed_version
+
+  need_cmd curl
+  need_cmd git
+  need_cmd jq
+
+  tag="$(resolve_simplex_tag "$requested_version")"
+  base_dir="${XDG_CONFIG_HOME:-$HOME}"
+  simplex_dir="${SIMPLEX_DIR:-$base_dir/.simplex}"
+  simplex_bin_dir="$simplex_dir/bin"
+
+  say "installing simplex@$tag"
+  if ! (
+    local temp_dir
+    local simplexup_path
+    local simplexup_url
+
+    temp_dir="$(mktemp -d)" || err 'failed to create a temporary directory'
+    trap 'rm -rf "$temp_dir"' EXIT
+    simplexup_path="$temp_dir/simplexup"
+    simplexup_url="https://raw.githubusercontent.com/BlockstreamResearch/smplx/$tag/simplexup/simplexup"
+
+    curl \
+      --fail \
+      --silent \
+      --show-error \
+      --location \
+      --retry 10 \
+      --retry-all-errors \
+      --retry-delay 1 \
+      --proto '=https' \
+      --tlsv1.2 \
+      --output "$simplexup_path" \
+      "$simplexup_url" || exit 1
+    chmod +x "$simplexup_path" || exit 1
+    export SIMPLEX_DIR="$simplex_dir"
+    "$simplexup_path" --install "$tag"
+  ); then
+    err "failed to install simplex@$tag for $(uname -s)/$(uname -m); verify the version and architecture at https://github.com/BlockstreamResearch/smplx/releases"
+  fi
+
+  append_path "$simplex_bin_dir"
+  need_cmd simplex
+  version_output="$(simplex --version)"
+  installed_version="$(reported_version simplex "$version_output")"
+  printf -v "$output_variable" '%s' "$installed_version"
+}
+
+install_simfmt() {
+  local requested_version="$1"
+  local output_variable="$2"
+  local cargo_home
+  local package='simfmt'
+  local version_label='latest'
+  local version_output
+  local installed_version
+  local -a args=(
+    --strategies crate-meta-data
+    --no-confirm
+    --force
+    --min-tls-version 1.2
+  )
+
+  cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+  append_path "$cargo_home/bin"
+  need_cmd cargo-binstall
+
+  if [ -n "$requested_version" ]; then
+    package="simfmt@$requested_version"
+    version_label="$requested_version"
+  fi
+
+  say "installing simfmt@$version_label from a precompiled release"
+  if ! cargo-binstall "${args[@]}" "$package"; then
+    err "failed to install simfmt@$version_label for $(uname -s)/$(uname -m); verify the version and architecture at https://github.com/BlockstreamResearch/simfmt/releases"
+  fi
+
+  need_cmd simfmt
+  version_output="$(simfmt --version)"
+  installed_version="$(reported_version simfmt "$version_output")"
+  printf -v "$output_variable" '%s' "$installed_version"
+}
+
+main() {
+  local components="${COMPONENTS:-}"
+  local entry
+  local component
+  local version
+  local has_version
+  local simplex_selected=false
+  local simfmt_selected=false
+  local simplex_requested_version=''
+  local simfmt_requested_version=''
+  local simplex_version=''
+  local simfmt_version=''
+  local -a entries=()
+
+  if [ -z "$(trim "$components")" ]; then
+    err "'components' is a required input"
+  fi
+
+  if [[ "$components" == ,* || "$components" == *, || "$components" == *,,* ]]; then
+    err "'components' contains an empty entry"
+  fi
+
+  IFS=',' read -r -a entries <<< "$components"
+
+  for entry in "${entries[@]}"; do
+    entry="$(trim "$entry")"
+    if [ -z "$entry" ]; then
+      err "'components' contains an empty entry"
+    fi
+
+    has_version=false
+    component="$entry"
+    version=''
+    if [[ "$entry" == *@* ]]; then
+      has_version=true
+      component="${entry%%@*}"
+      version="${entry#*@}"
+      if [[ "$version" == *@* ]]; then
+        err "malformed component entry: '$entry'"
+      fi
+    fi
+
+    component="$(trim "$component")"
+    version="$(trim "$version")"
+    if [ "$has_version" = true ] && [ -z "$version" ]; then
+      err "missing version in component entry: '$entry'"
+    fi
+    if [ -n "$version" ]; then
+      validate_version "$component" "$version"
+    fi
+
+    case "$component" in
+      simplex)
+        if [ "$simplex_selected" = true ]; then
+          err "duplicate component: 'simplex'"
+        fi
+        simplex_selected=true
+        simplex_requested_version="$version"
+        ;;
+      simfmt)
+        if [ "$simfmt_selected" = true ]; then
+          err "duplicate component: 'simfmt'"
+        fi
+        simfmt_selected=true
+        simfmt_requested_version="$version"
+        ;;
+      *)
+        err "unknown component: '$component'"
+        ;;
+    esac
+  done
+
+  if [ "$simplex_selected" = true ]; then
+    install_simplex "$simplex_requested_version" simplex_version
+  fi
+  if [ "$simfmt_selected" = true ]; then
+    install_simfmt "$simfmt_requested_version" simfmt_version
+  fi
+
+  write_key_value_out simplex-version "$simplex_version"
+  write_key_value_out simfmt-version "$simfmt_version"
+  say 'done'
+}
+
+main "$@"
