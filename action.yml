@@ -13,6 +13,12 @@ inputs:
       simfmt, simplex@VERSION, or simfmt@VERSION.
     required: true
 
+  binstall-version:
+    description: >-
+      Version of cargo-binstall to install (e.g. 1.2.3 or v1.2.3). Defaults to latest.
+    required: false
+    default: "1.22.0"
+
 outputs:
   simplex-version:
     description: Installed Simplex version, or empty when Simplex was not selected
@@ -26,9 +32,9 @@ runs:
   steps:
     - name: Install cargo-binstall
       if: contains(inputs.components, 'simfmt')
-      uses: cargo-bins/cargo-binstall@main
+      uses: cargo-bins/cargo-binstall@v1.22.0
       with:
-        version: "1.22.0"
+        version: ${{ inputs.binstall-version }}
 
     - id: install
       name: Install SimplicityHL components

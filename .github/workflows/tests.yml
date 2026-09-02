@@ -10,7 +10,7 @@ on:
       - main
       - dev
 
-permissions: {}
+permissions: { }
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -276,12 +276,18 @@ jobs:
         run: simplex test -v
 
   formatting:
-    name: SimplicityHL formatting
+    name: SimplicityHL formatting with ${{ matrix.mode }} cargo-binstall
     needs: versions
     if: needs.versions.outputs.simfmt-available == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      matrix:
+        include:
+          - mode: default
+          - mode: explicit
+            binstall-version: "1.21.1"
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -293,6 +299,7 @@ jobs:
         uses: ./
         with:
           components: simplex@${{ needs.versions.outputs.simplex }},simfmt@${{ needs.versions.outputs.simfmt }}
+          binstall-version: ${{ matrix.binstall-version }}
 
       - name: Check action outputs
         shell: bash
