@@ -47,6 +47,10 @@ components: simplex@v0.0.10,simfmt@0.0.2
 An entry without a version resolves the latest stable release. Empty entries,
 unknown components, duplicates, and malformed versions are rejected.
 
+### `binstall-version`
+
+Optional. Version of `cargo-binstall` used to download and install the precompiled `simfmt` binary. Defaults to `1.22.0` and is ignored unless `simfmt` is selected.
+
 ## Outputs
 
 | Output | Description |
