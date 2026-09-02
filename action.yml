@@ -15,7 +15,7 @@ inputs:
 
   binstall-version:
     description: >-
-      Version of cargo-binstall to install (e.g. 1.2.3 or v1.2.3). Defaults to latest.
+      Version of cargo-binstall to install (e.g. 1.2.3 or v1.2.3). Defaults to 1.22.0.
     required: false
     default: "1.22.0"
 
