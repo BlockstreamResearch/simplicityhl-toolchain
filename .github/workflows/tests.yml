@@ -34,7 +34,7 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           
-          bash -n install .github/scripts/simfmt-check
+          bash -n install
 
       - name: Install ShellCheck when unavailable
         shell: bash
@@ -60,20 +60,18 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           
-          shellcheck install .github/scripts/simfmt-check
+          shellcheck install
 
   versions:
-    name: Resolve released versions
+    name: Resolve the latest Simplex release
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
       simplex: ${{ steps.versions.outputs.simplex }}
-      simfmt: ${{ steps.versions.outputs.simfmt }}
-      simfmt-available: ${{ steps.versions.outputs.simfmt-available }}
     steps:
       - id: versions
-        name: Resolve latest releases
+        name: Resolve the latest release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -99,16 +97,6 @@ jobs:
           simplex_json="$(curl "${api_args[@]}" https://api.github.com/repos/BlockstreamResearch/smplx/releases/latest)"
           simplex_tag="$(jq -er '.tag_name | strings | select(length > 0)' <<< "$simplex_json")"
           printf 'simplex=%s\n' "${simplex_tag#v}" >> "$GITHUB_OUTPUT"
-
-          if simfmt_json="$(curl "${api_args[@]}" https://api.github.com/repos/BlockstreamResearch/simfmt/releases/latest 2>/dev/null)" &&
-            simfmt_tag="$(jq -er 'select((.assets | length) > 0) | .tag_name | strings | select(length > 0)' <<< "$simfmt_json")"; then
-            printf 'simfmt=%s\n' "${simfmt_tag#v}" >> "$GITHUB_OUTPUT"
-            printf 'simfmt-available=true\n' >> "$GITHUB_OUTPUT"
-          else
-            printf 'simfmt=\n' >> "$GITHUB_OUTPUT"
-            printf 'simfmt-available=false\n' >> "$GITHUB_OUTPUT"
-            printf 'simfmt has no precompiled GitHub release yet; simfmt jobs will be skipped.\n'
-          fi
 
   install-simplex:
     name: Install Simplex (${{ matrix.os }}, ${{ matrix.mode }})
@@ -154,71 +142,18 @@ jobs:
         shell: bash
         env:
           INSTALLED_VERSION: ${{ steps.toolchain.outputs.simplex-version }}
-          SIMFMT_VERSION: ${{ steps.toolchain.outputs.simfmt-version }}
         run: |
           #!/usr/bin/env bash
           set -euo pipefail
           
           test -n "$INSTALLED_VERSION"
-          test -z "$SIMFMT_VERSION"
           simplex --version | grep --fixed-strings "$INSTALLED_VERSION"
-
-  install-simfmt:
-    name: Install simfmt (${{ matrix.os }}, ${{ matrix.mode }})
-    needs: versions
-    if: needs.versions.outputs.simfmt-available == 'true'
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-        mode:
-          - latest
-          - explicit
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-
-      - id: selection
-        name: Select component version
-        shell: bash
-        env:
-          MODE: ${{ matrix.mode }}
-          SIMFMT_VERSION: ${{ needs.versions.outputs.simfmt }}
-        run: |
-          #!/usr/bin/env bash
-          set -euo pipefail
           
-          if [ "$MODE" = explicit ]; then
-            printf 'components=simfmt@%s\n' "$SIMFMT_VERSION" >> "$GITHUB_OUTPUT"
-          else
-            printf 'components=simfmt\n' >> "$GITHUB_OUTPUT"
+          if [ "$(simfmt --version)" != "$(simplex fmt --version)" ]; then 
+            printf "error_msg=\`simfmt\` version must be equal to \`simplex fmt\`\n" >> "$GITHUB_OUTPUT"
+            exit 1
           fi
-
-      - id: toolchain
-        name: Install simfmt with the local action
-        uses: ./
-        with:
-          components: ${{ steps.selection.outputs.components }}
-
-      - name: Verify simfmt installation
-        shell: bash
-        env:
-          INSTALLED_VERSION: ${{ steps.toolchain.outputs.simfmt-version }}
-          SIMPLEX_VERSION: ${{ steps.toolchain.outputs.simplex-version }}
-        run: |
-          #!/usr/bin/env bash
-          set -euo pipefail
           
-          test -n "$INSTALLED_VERSION"
-          test -z "$SIMPLEX_VERSION"
-          simfmt --version | grep --fixed-strings "$INSTALLED_VERSION"
 
   fixture:
     name: Example project
@@ -276,18 +211,11 @@ jobs:
         run: simplex test -v
 
   formatting:
-    name: SimplicityHL formatting with ${{ matrix.mode }} cargo-binstall
+    name: SimplicityHL formatting
     needs: versions
-    if: needs.versions.outputs.simfmt-available == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    strategy:
-      matrix:
-        include:
-          - mode: default
-          - mode: explicit
-            binstall-version: "1.21.1"
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -295,31 +223,31 @@ jobs:
           persist-credentials: false
 
       - id: toolchain
-        name: Install all components with the local action
+        name: Install Simplex with the local action
         uses: ./
         with:
-          components: simplex@${{ needs.versions.outputs.simplex }},simfmt@${{ needs.versions.outputs.simfmt }}
-          binstall-version: ${{ matrix.binstall-version }}
+          components: simplex@${{ needs.versions.outputs.simplex }}
 
-      - name: Check action outputs
+      - name: Check the installed toolchain
         shell: bash
         env:
           SIMPLEX_VERSION: ${{ steps.toolchain.outputs.simplex-version }}
-          SIMFMT_VERSION: ${{ steps.toolchain.outputs.simfmt-version }}
         run: |
           #!/usr/bin/env bash
           set -euo pipefail
           
           test -n "$SIMPLEX_VERSION"
-          test -n "$SIMFMT_VERSION"
+          simfmt --version
+          simplex fmt --version
 
       - name: Check SimplicityHL formatting
         shell: bash
+        working-directory: example
         run: |
           #!/usr/bin/env bash
           set -euo pipefail
           
-          .github/scripts/simfmt-check -all -d "$GITHUB_WORKSPACE" --check
+          simplex fmt --check
 
   invalid-inputs:
     name: Invalid input handling
@@ -346,6 +274,13 @@ jobs:
         with:
           components: unknown
 
+      - id: simfmt
+        name: Reject standalone simfmt selection
+        continue-on-error: true
+        uses: ./
+        with:
+          components: simfmt
+
       - id: duplicate
         name: Reject a duplicate component
         continue-on-error: true
@@ -360,12 +295,19 @@ jobs:
         with:
           components: simplex@
 
+      - id: legacy
+        name: Reject a release without bundled simfmt
+        continue-on-error: true
+        uses: ./
+        with:
+          components: simplex@0.0.10
+
       - id: nonexistent
         name: Reject a nonexistent release
         continue-on-error: true
         uses: ./
         with:
-          components: simplex@0.0.0-does-not-exist
+          components: simplex@99.99.99-does-not-exist
 
       - name: Verify every invalid input failed
         if: always()
@@ -373,8 +315,10 @@ jobs:
         env:
           MISSING: ${{ steps.missing.outcome }}
           UNKNOWN: ${{ steps.unknown.outcome }}
+          SIMFMT: ${{ steps.simfmt.outcome }}
           DUPLICATE: ${{ steps.duplicate.outcome }}
           MALFORMED: ${{ steps.malformed.outcome }}
+          LEGACY: ${{ steps.legacy.outcome }}
           NONEXISTENT: ${{ steps.nonexistent.outcome }}
         run: |
           #!/usr/bin/env bash
@@ -382,6 +326,8 @@ jobs:
           
           test "$MISSING" = failure
           test "$UNKNOWN" = failure
+          test "$SIMFMT" = failure
           test "$DUPLICATE" = failure
           test "$MALFORMED" = failure
+          test "$LEGACY" = failure
           test "$NONEXISTENT" = failure

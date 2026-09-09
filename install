@@ -92,6 +92,51 @@ github_api() {
   curl "${args[@]}" "$url"
 }
 
+# Compares two normalized versions in the format "major.minor.patch".
+# Returns 0 only when $1 is strictly greater than $2. Returns 1 when $1 is
+# less than or equal to $2.
+version_gt() {
+  [ "$1" = "$2" ] && return 1
+
+  local major1
+  local minor1
+  local patch1
+  local major2
+  local minor2
+  local patch2
+
+  IFS=. read -r major1 minor1 patch1 <<EOF
+$1
+EOF
+  IFS=. read -r major2 minor2 patch2 <<EOF
+$2
+EOF
+
+  [ "$major1" -gt "$major2" ] && return 0
+  [ "$major1" -lt "$major2" ] && return 1
+  [ "$minor1" -gt "$minor2" ] && return 0
+  [ "$minor1" -lt "$minor2" ] && return 1
+  [ "$patch1" -gt "$patch2" ] && return 0
+
+  return 1
+}
+
+check_action_compatibility() {
+  local tag="$1"
+  local version="${tag#v}"
+  local minimum_version='0.0.11'
+
+  if [[ "$version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)([.+-].*)?$ ]]; then
+    version="${BASH_REMATCH[1]}"
+  else
+    err "unsupported Simplex version tag '$tag'; expected a semantic version"
+  fi
+
+  if version_gt "$minimum_version" "$version"; then
+    err "Simplex $tag does not bundle simfmt; use Simplex v$minimum_version or newer"
+  fi
+}
+
 resolve_simplex_tag() {
   local requested_version="$1"
   local release_json
@@ -129,6 +174,10 @@ install_simplex() {
   need_cmd jq
 
   tag="$(resolve_simplex_tag "$requested_version")"
+
+  # Check whether we're installing appropriate `simplex` version
+  check_action_compatibility "$tag"
+
   base_dir="${XDG_CONFIG_HOME:-$HOME}"
   simplex_dir="${SIMPLEX_DIR:-$base_dir/.simplex}"
   simplex_bin_dir="$simplex_dir/bin"
@@ -165,43 +214,14 @@ install_simplex() {
 
   append_path "$simplex_bin_dir"
   need_cmd simplex
+  if [ ! -x "$simplex_bin_dir/simfmt" ]; then
+    err "Simplex $tag did not install the bundled simfmt binary"
+  fi
+  if ! "$simplex_bin_dir/simfmt" --version >/dev/null; then
+    err "the bundled simfmt binary installed by Simplex $tag is not executable"
+  fi
   version_output="$(simplex --version)"
   installed_version="$(reported_version simplex "$version_output")"
-  printf -v "$output_variable" '%s' "$installed_version"
-}
-
-install_simfmt() {
-  local requested_version="$1"
-  local output_variable="$2"
-  local cargo_home
-  local package='simfmt'
-  local version_label='latest'
-  local version_output
-  local installed_version
-  local -a args=(
-    --strategies crate-meta-data
-    --no-confirm
-    --force
-    --min-tls-version 1.2
-  )
-
-  cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-  append_path "$cargo_home/bin"
-  need_cmd cargo-binstall
-
-  if [ -n "$requested_version" ]; then
-    package="simfmt@$requested_version"
-    version_label="$requested_version"
-  fi
-
-  say "installing simfmt@$version_label from a precompiled release"
-  if ! cargo-binstall "${args[@]}" "$package"; then
-    err "failed to install simfmt@$version_label for $(uname -s)/$(uname -m); verify the version and architecture at https://github.com/BlockstreamResearch/simfmt/releases"
-  fi
-
-  need_cmd simfmt
-  version_output="$(simfmt --version)"
-  installed_version="$(reported_version simfmt "$version_output")"
   printf -v "$output_variable" '%s' "$installed_version"
 }
 
@@ -212,11 +232,8 @@ main() {
   local version
   local has_version
   local simplex_selected=false
-  local simfmt_selected=false
   local simplex_requested_version=''
-  local simfmt_requested_version=''
   local simplex_version=''
-  local simfmt_version=''
   local -a entries=()
 
   if [ -z "$(trim "$components")" ]; then
@@ -264,28 +281,15 @@ main() {
         simplex_selected=true
         simplex_requested_version="$version"
         ;;
-      simfmt)
-        if [ "$simfmt_selected" = true ]; then
-          err "duplicate component: 'simfmt'"
-        fi
-        simfmt_selected=true
-        simfmt_requested_version="$version"
-        ;;
       *)
         err "unknown component: '$component'"
         ;;
     esac
   done
 
-  if [ "$simplex_selected" = true ]; then
-    install_simplex "$simplex_requested_version" simplex_version
-  fi
-  if [ "$simfmt_selected" = true ]; then
-    install_simfmt "$simfmt_requested_version" simfmt_version
-  fi
+  install_simplex "${simplex_requested_version}" simplex_version
 
-  write_key_value_out simplex-version "$simplex_version"
-  write_key_value_out simfmt-version "$simfmt_version"
+  write_key_value_out simplex-version "${simplex_version}"
   say 'done'
 }
 
