@@ -1,6 +1,6 @@
 name: SimplicityHL toolchain
 author: Blockstream Research
-description: Install precompiled Simplex and Simfmt binaries
+description: Install a precompiled Simplex toolchain
 
 branding:
   icon: terminal
@@ -9,33 +9,19 @@ branding:
 inputs:
   components:
     description: >-
-      Required comma-separated list of components. Each entry is simplex,
-      simfmt, simplex@VERSION, or simfmt@VERSION.
-    required: true
-
-  binstall-version:
-    description: >-
-      Version of cargo-binstall to install (e.g. 1.2.3 or v1.2.3). Defaults to 1.22.0.
+      Optional comma-separated list of components. Currently supports simplex
+      and simplex@VERSION.
     required: false
-    default: "1.22.0"
+    default: "simplex"
 
 outputs:
   simplex-version:
-    description: Installed Simplex version, or empty when Simplex was not selected
+    description: Installed Simplex version
     value: ${{ steps.install.outputs.simplex-version }}
-  simfmt-version:
-    description: Installed simfmt version, or empty when simfmt was not selected
-    value: ${{ steps.install.outputs.simfmt-version }}
 
 runs:
   using: composite
   steps:
-    - name: Install cargo-binstall
-      if: contains(inputs.components, 'simfmt')
-      uses: cargo-bins/cargo-binstall@v1.22.0
-      with:
-        version: ${{ inputs.binstall-version }}
-
     - id: install
       name: Install SimplicityHL components
       shell: bash

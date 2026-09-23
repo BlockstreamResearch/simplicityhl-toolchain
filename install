@@ -170,41 +170,6 @@ install_simplex() {
   printf -v "$output_variable" '%s' "$installed_version"
 }
 
-install_simfmt() {
-  local requested_version="$1"
-  local output_variable="$2"
-  local cargo_home
-  local package='simfmt'
-  local version_label='latest'
-  local version_output
-  local installed_version
-  local -a args=(
-    --strategies crate-meta-data
-    --no-confirm
-    --force
-    --min-tls-version 1.2
-  )
-
-  cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-  append_path "$cargo_home/bin"
-  need_cmd cargo-binstall
-
-  if [ -n "$requested_version" ]; then
-    package="simfmt@$requested_version"
-    version_label="$requested_version"
-  fi
-
-  say "installing simfmt@$version_label from a precompiled release"
-  if ! cargo-binstall "${args[@]}" "$package"; then
-    err "failed to install simfmt@$version_label for $(uname -s)/$(uname -m); verify the version and architecture at https://github.com/BlockstreamResearch/simfmt/releases"
-  fi
-
-  need_cmd simfmt
-  version_output="$(simfmt --version)"
-  installed_version="$(reported_version simfmt "$version_output")"
-  printf -v "$output_variable" '%s' "$installed_version"
-}
-
 main() {
   local components="${COMPONENTS:-}"
   local entry
@@ -212,15 +177,12 @@ main() {
   local version
   local has_version
   local simplex_selected=false
-  local simfmt_selected=false
   local simplex_requested_version=''
-  local simfmt_requested_version=''
   local simplex_version=''
-  local simfmt_version=''
   local -a entries=()
 
   if [ -z "$(trim "$components")" ]; then
-    err "'components' is a required input"
+    components='simplex'
   fi
 
   if [[ "$components" == ,* || "$components" == *, || "$components" == *,,* ]]; then
@@ -264,13 +226,6 @@ main() {
         simplex_selected=true
         simplex_requested_version="$version"
         ;;
-      simfmt)
-        if [ "$simfmt_selected" = true ]; then
-          err "duplicate component: 'simfmt'"
-        fi
-        simfmt_selected=true
-        simfmt_requested_version="$version"
-        ;;
       *)
         err "unknown component: '$component'"
         ;;
@@ -280,12 +235,8 @@ main() {
   if [ "$simplex_selected" = true ]; then
     install_simplex "$simplex_requested_version" simplex_version
   fi
-  if [ "$simfmt_selected" = true ]; then
-    install_simfmt "$simfmt_requested_version" simfmt_version
-  fi
 
   write_key_value_out simplex-version "$simplex_version"
-  write_key_value_out simfmt-version "$simfmt_version"
   say 'done'
 }
 
