@@ -7,12 +7,10 @@ branding:
   color: purple
 
 inputs:
-  components:
-    description: >-
-      Optional comma-separated list of components. Currently supports simplex
-      and simplex@VERSION.
+  simplex:
+    description: Simplex version to install (latest, v0.2.0, or 0.2.0)
     required: false
-    default: "simplex"
+    default: "latest"
 
 outputs:
   simplex-version:
@@ -23,9 +21,9 @@ runs:
   using: composite
   steps:
     - id: install
-      name: Install SimplicityHL components
+      name: Install Simplex
       shell: bash
       env:
-        COMPONENTS: ${{ inputs.components }}
+        SIMPLEX_VERSION: ${{ inputs.simplex }}
         GITHUB_TOKEN: ${{ github.token }}
       run: "$GITHUB_ACTION_PATH/install"

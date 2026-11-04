@@ -2,6 +2,14 @@
 
 set -euo pipefail
 
+main() {
+  local requested_version
+
+  requested_version="$(parse_simplex_version "${SIMPLEX_VERSION:-latest}")"
+  install_simplex "$requested_version"
+  say 'done'
+}
+
 say() {
   printf 'simplicityhl-toolchain: %s\n' "$1"
 }
@@ -11,12 +19,8 @@ err() {
   exit 1
 }
 
-check_cmd() {
-  command -v "$1" &>/dev/null
-}
-
 need_cmd() {
-  if ! check_cmd "$1"; then
+  if ! command -v "$1" &>/dev/null; then
     err "need '$1' (command not found)"
   fi
 }
@@ -26,16 +30,21 @@ trim() {
 
   value="${value#"${value%%[![:space:]]*}"}"
   value="${value%"${value##*[![:space:]]}"}"
+
   printf '%s\n' "$value"
 }
 
-validate_version() {
-  local component="$1"
-  local version="$2"
+parse_simplex_version() {
+  local version
 
-  if [[ ! "$version" =~ ^v?[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
-    err "invalid version for '$component': '$version'"
+  version="$(trim "$1")"
+  if [ -z "$version" ]; then
+    version=latest
+  elif [[ "$1" == *$'\n'* || ! "$version" =~ ^v?[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
+    err "invalid version for 'simplex': '$version'"
   fi
+
+  printf '%s\n' "$version"
 }
 
 append_path() {
@@ -58,19 +67,22 @@ write_key_value_out() {
 }
 
 reported_version() {
-  local component="$1"
-  local version_output="$2"
+  local version_output="$1"
 
   if [[ "$version_output" =~ v?([0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?) ]]; then
     printf '%s\n' "${BASH_REMATCH[1]}"
     return
   fi
 
-  err "could not determine the installed $component version from: $version_output"
+  err "could not determine the installed simplex version from: $version_output"
 }
 
+# Use REST API version 2026-03-10 for GitHub.
 github_api() {
   local url="$1"
+  local media_type="${2:-application/vnd.github+json}"
+  local output="${3:--}"
+
   local -a args=(
     --fail
     --silent
@@ -81,15 +93,15 @@ github_api() {
     --retry-delay 1
     --proto '=https'
     --tlsv1.2
-    --header 'Accept: application/vnd.github+json'
-    --header 'X-GitHub-Api-Version: 2022-11-28'
+    --header "Accept: $media_type"
+    --header 'X-GitHub-Api-Version: 2026-03-10'
   )
 
   if [ -n "${GITHUB_TOKEN:-}" ]; then
     args+=(--header "Authorization: Bearer $GITHUB_TOKEN")
   fi
 
-  curl "${args[@]}" "$url"
+  curl "${args[@]}" --output "$output" "$url"
 }
 
 resolve_simplex_tag() {
@@ -97,7 +109,7 @@ resolve_simplex_tag() {
   local release_json
   local tag
 
-  if [ -n "$requested_version" ]; then
+  if [ "$requested_version" != latest ]; then
     if [[ "$requested_version" == v* ]]; then
       printf '%s\n' "$requested_version"
     else
@@ -111,12 +123,52 @@ resolve_simplex_tag() {
     err 'failed to resolve the latest Simplex release'
   tag="$(jq -er '.tag_name | strings | select(length > 0)' <<< "$release_json")" || \
     err 'the latest Simplex release does not contain a tag name'
+
   printf '%s\n' "$tag"
 }
 
+run_simplexup() (
+  local tag="$1"
+  local simplex_dir="$2"
+  local temp_dir
+  local simplexup_path
+  local simplexup_url
+  local encoded_tag
+
+  temp_dir="$(mktemp -d)" || err 'failed to create a temporary directory'
+  trap 'rm -rf "$temp_dir"' EXIT
+  simplexup_path="$temp_dir/simplexup"
+  encoded_tag="$(jq -rn --arg tag "$tag" '$tag | @uri')" || return 1
+
+  simplexup_url="https://api.github.com/repos/BlockstreamResearch/smplx/contents/simplexup/simplexup?ref=$encoded_tag"
+  github_api "$simplexup_url" 'application/vnd.github.raw+json' "$simplexup_path" || return 1
+
+  chmod +x "$simplexup_path" || return 1
+
+  # Released simplexup scripts make API requests without using GITHUB_TOKEN.
+  # Export this override only from this subshell, keeping credentials off asset URLs.
+  # Invoked by the downloaded simplexup script.
+  #
+  # shellcheck disable=SC2329
+  curl() {
+    local arg
+
+    for arg in "$@"; do
+      if [[ "$arg" == https://api.github.com/* ]] && [ -n "${GITHUB_TOKEN:-}" ]; then
+        command curl --header "Authorization: Bearer $GITHUB_TOKEN" "$@"
+        return
+      fi
+    done
+
+    command curl "$@"
+  }
+  export -f curl
+
+  SIMPLEX_DIR="$simplex_dir" "$simplexup_path" --install "$tag"
+)
+
 install_simplex() {
   local requested_version="$1"
-  local output_variable="$2"
   local tag
   local base_dir
   local simplex_dir
@@ -134,110 +186,15 @@ install_simplex() {
   simplex_bin_dir="$simplex_dir/bin"
 
   say "installing simplex@$tag"
-  if ! (
-    local temp_dir
-    local simplexup_path
-    local simplexup_url
-
-    temp_dir="$(mktemp -d)" || err 'failed to create a temporary directory'
-    trap 'rm -rf "$temp_dir"' EXIT
-    simplexup_path="$temp_dir/simplexup"
-    simplexup_url="https://raw.githubusercontent.com/BlockstreamResearch/smplx/$tag/simplexup/simplexup"
-
-    curl \
-      --fail \
-      --silent \
-      --show-error \
-      --location \
-      --retry 10 \
-      --retry-all-errors \
-      --retry-delay 1 \
-      --proto '=https' \
-      --tlsv1.2 \
-      --output "$simplexup_path" \
-      "$simplexup_url" || exit 1
-    chmod +x "$simplexup_path" || exit 1
-    export SIMPLEX_DIR="$simplex_dir"
-    "$simplexup_path" --install "$tag"
-  ); then
+  if ! run_simplexup "$tag" "$simplex_dir"; then
     err "failed to install simplex@$tag for $(uname -s)/$(uname -m); verify the version and architecture at https://github.com/BlockstreamResearch/smplx/releases"
   fi
 
   append_path "$simplex_bin_dir"
   need_cmd simplex
   version_output="$(simplex --version)"
-  installed_version="$(reported_version simplex "$version_output")"
-  printf -v "$output_variable" '%s' "$installed_version"
-}
-
-main() {
-  local components="${COMPONENTS:-}"
-  local entry
-  local component
-  local version
-  local has_version
-  local simplex_selected=false
-  local simplex_requested_version=''
-  local simplex_version=''
-  local -a entries=()
-
-  if [ -z "$(trim "$components")" ]; then
-    components='simplex'
-  fi
-
-  if [[ "$components" == ,* || "$components" == *, || "$components" == *,,* ]]; then
-    err "'components' contains an empty entry"
-  fi
-
-  IFS=',' read -r -a entries <<< "$components"
-
-  for entry in "${entries[@]}"; do
-    entry="$(trim "$entry")"
-    if [ -z "$entry" ]; then
-      err "'components' contains an empty entry"
-    fi
-
-    has_version=false
-    component="$entry"
-    version=''
-    if [[ "$entry" == *@* ]]; then
-      has_version=true
-      component="${entry%%@*}"
-      version="${entry#*@}"
-      if [[ "$version" == *@* ]]; then
-        err "malformed component entry: '$entry'"
-      fi
-    fi
-
-    component="$(trim "$component")"
-    version="$(trim "$version")"
-    if [ "$has_version" = true ] && [ -z "$version" ]; then
-      err "missing version in component entry: '$entry'"
-    fi
-    if [ -n "$version" ]; then
-      validate_version "$component" "$version"
-    fi
-
-    case "$component" in
-      simplex)
-        if [ "$simplex_selected" = true ]; then
-          err "duplicate component: 'simplex'"
-        fi
-        simplex_selected=true
-        simplex_requested_version="$version"
-        ;;
-      *)
-        err "unknown component: '$component'"
-        ;;
-    esac
-  done
-
-  if [ "$simplex_selected" = true ]; then
-    install_simplex "$simplex_requested_version" simplex_version
-  fi
-
-  write_key_value_out simplex-version "$simplex_version"
-  say 'done'
+  installed_version="$(reported_version "$version_output")"
+  write_key_value_out simplex-version "$installed_version"
 }
 
 main "$@"

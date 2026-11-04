@@ -87,19 +87,27 @@ jobs:
         name: Reinstall the resolved Simplex release explicitly
         uses: ./
         with:
-          components: simplex@${{ steps.default.outputs.simplex-version }}
+          simplex: ${{ steps.default.outputs.simplex-version }}
+
+      - id: prefixed
+        name: Reinstall with a v-prefixed version
+        uses: ./
+        with:
+          simplex: v${{ steps.default.outputs.simplex-version }}
 
       - name: Verify Simplex installations
         shell: bash
         env:
           DEFAULT_VERSION: ${{ steps.default.outputs.simplex-version }}
           EXPLICIT_VERSION: ${{ steps.explicit.outputs.simplex-version }}
+          PREFIXED_VERSION: ${{ steps.prefixed.outputs.simplex-version }}
         run: |
           #!/usr/bin/env bash
           set -euo pipefail
 
           test -n "$DEFAULT_VERSION"
           test "$DEFAULT_VERSION" = "$EXPLICIT_VERSION"
+          test "$DEFAULT_VERSION" = "$PREFIXED_VERSION"
           simplex --version | grep --fixed-strings "$DEFAULT_VERSION"
 
   fixture:
@@ -133,7 +141,7 @@ jobs:
         name: Install Simplex with the local action
         uses: ./
         with:
-          components: simplex
+          simplex: latest
 
       - name: Verify the installed toolchain
         shell: bash
@@ -175,7 +183,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Reject invalid component inputs
+      - name: Reject invalid Simplex versions
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -185,14 +193,15 @@ jobs:
 
           invalid_inputs=(
             unknown
-            simplex,simplex
-            simplex@
-            simplex@0.0.0-does-not-exist
+            0.2.0,0.2.1
+            simplex@0.2.0
+            $'0.2.0\n0.2.1'
+            0.0.0-does-not-exist
           )
 
-          for components in "${invalid_inputs[@]}"; do
-            if COMPONENTS="$components" GITHUB_OUTPUT="$RUNNER_TEMP/invalid-output" ./install; then
-              printf 'expected components=%s to fail\n' "$components" >&2
+          for version in "${invalid_inputs[@]}"; do
+            if SIMPLEX_VERSION="$version" GITHUB_OUTPUT="$RUNNER_TEMP/invalid-output" ./install; then
+              printf 'expected simplex=%s to fail\n' "$version" >&2
               exit 1
             fi
           done
