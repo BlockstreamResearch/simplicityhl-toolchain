@@ -2,12 +2,13 @@
 
 set -euo pipefail
 
+DEFAULT_SIMPLEX_REPO="BlockstreamResearch/smplx"
+
 main() {
   local requested_version
 
   requested_version="$(parse_simplex_version "${SIMPLEX_VERSION:-latest}")"
   install_simplex "$requested_version"
-  say 'done'
 }
 
 say() {
@@ -63,6 +64,7 @@ write_key_value_out() {
   if [ -z "${GITHUB_OUTPUT:-}" ]; then
     err 'GITHUB_OUTPUT is not set'
   fi
+
   printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
 }
 
@@ -119,7 +121,7 @@ resolve_simplex_tag() {
   fi
 
   say 'resolving the latest Simplex release' >&2
-  release_json="$(github_api 'https://api.github.com/repos/BlockstreamResearch/smplx/releases/latest')" || \
+  release_json="$(github_api "https://api.github.com/repos/${DEFAULT_SIMPLEX_REPO}/releases/latest")" || \
     err 'failed to resolve the latest Simplex release'
   tag="$(jq -er '.tag_name | strings | select(length > 0)' <<< "$release_json")" || \
     err 'the latest Simplex release does not contain a tag name'
@@ -137,10 +139,11 @@ run_simplexup() (
 
   temp_dir="$(mktemp -d)" || err 'failed to create a temporary directory'
   trap 'rm -rf "$temp_dir"' EXIT
+
   simplexup_path="$temp_dir/simplexup"
   encoded_tag="$(jq -rn --arg tag "$tag" '$tag | @uri')" || return 1
 
-  simplexup_url="https://api.github.com/repos/BlockstreamResearch/smplx/contents/simplexup/simplexup?ref=$encoded_tag"
+  simplexup_url="https://api.github.com/repos/${DEFAULT_SIMPLEX_REPO}/contents/simplexup/simplexup?ref=${encoded_tag}"
   github_api "$simplexup_url" 'application/vnd.github.raw+json' "$simplexup_path" || return 1
 
   chmod +x "$simplexup_path" || return 1
@@ -187,13 +190,16 @@ install_simplex() {
 
   say "installing simplex@$tag"
   if ! run_simplexup "$tag" "$simplex_dir"; then
-    err "failed to install simplex@$tag for $(uname -s)/$(uname -m); verify the version and architecture at https://github.com/BlockstreamResearch/smplx/releases"
+    err "failed to install simplex@$tag for $(uname -s)/$(uname -m); verify the version and architecture at https://github.com/${DEFAULT_SIMPLEX_REPO}/releases"
   fi
 
   append_path "$simplex_bin_dir"
+
   need_cmd simplex
+
   version_output="$(simplex --version)"
   installed_version="$(reported_version "$version_output")"
+
   write_key_value_out simplex-version "$installed_version"
 }
 
