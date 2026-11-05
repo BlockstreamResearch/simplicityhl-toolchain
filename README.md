@@ -1,13 +1,11 @@
 # SimplicityHL toolchain
 
-This action installs precompiled [Simplex][1]
-and [Simfmt][2] binaries. It does not
-install, select, or modify Rust or Cargo.
+This action installs a precompiled [Simplex][1] toolchain. It does not install, select, or modify Rust or Cargo.
 
 ## Usage
 
-Set up the Rust version required by your project separately, then select the
-SimplicityHL components to install:
+Set up the Rust version required by your project separately.
+With no input, the action installs the latest stable Simplex release:
 
 ```yaml
 steps:
@@ -20,74 +18,56 @@ steps:
 
   - id: toolchain
     name: Install SimplicityHL tools
-    uses: BlockstreamResearch/simplicityhl-toolchain@v1
-    with:
-      components: simplex@0.0.10,simfmt@0.0.2
+    uses: BlockstreamResearch/simplicityhl-toolchain@v0.0.3
 
   - run: simplex --version
-  - run: simfmt --version
+  - run: simplex fmt --check
 ```
 
-For security-sensitive workflows, pin actions to the full commit SHA of the
-release you reviewed instead of a movable tag.
+For security-sensitive workflows, pin actions to the full commit SHA of the release you reviewed instead of a movable tag.
 
 ## Inputs
 
-### `components`
+### `simplex`
 
-Required. A comma-separated list containing `simplex`, `simfmt`, or both. Add
-`@VERSION` to an entry to install a specific release:
+Optional. 
+The Simplex version to install. 
+Defaults to `latest`.
+Use a version with or without a leading `v` to install a specific release:
 
 ```yaml
-components: simplex,simfmt
-components: simplex@0.0.10
-components: simplex@v0.0.10,simfmt@0.0.2
+simplex: latest
+simplex: 0.2.0
+simplex: v0.2.0
 ```
 
-An entry without a version resolves the latest stable release. Empty entries,
-unknown components, duplicates, and malformed versions are rejected.
-
-### `binstall-version`
-
-Optional. Version of `cargo-binstall` used to download and install the precompiled `simfmt` binary. Defaults to `1.22.0` and is ignored unless `simfmt` is selected.
+Omitting the input, or passing an empty or whitespace-only value, installs the latest stable Simplex release.
+Malformed versions are rejected.
 
 ## Outputs
 
 | Output | Description |
 | --- | --- |
-| `simplex-version` | Installed Simplex version, or empty if it was not selected. |
-| `simfmt-version` | Installed simfmt version, or empty if it was not selected. |
+| `simplex-version` | Installed Simplex version. |
 
 ```yaml
 - id: toolchain
-  uses: BlockstreamResearch/simplicityhl-toolchain@v1
+  uses: BlockstreamResearch/simplicityhl-toolchain@v0.0.3
   with:
-    components: simplex,simfmt
+    simplex: 0.2.0
 
-- run: printf '%s / %s\n' "$SIMPLEX_VERSION" "$SIMFMT_VERSION"
+- run: printf 'Simplex %s\n' "$SIMPLEX_VERSION"
   env:
     SIMPLEX_VERSION: ${{ steps.toolchain.outputs.simplex-version }}
-    SIMFMT_VERSION: ${{ steps.toolchain.outputs.simfmt-version }}
 ```
 
 ## Precompiled binaries only
 
-* Simplex is installed through `simplexup`. 
-* Simfmt is installed by the standalone
-precompiled `cargo-binstall` executable with only its official crate-metadata release strategy enabled.
+Simplex is installed through `simplexup`.
 
-Supported platforms are determined by each project's published release assets.
-The action does not maintain a separate architecture table. See the
-[Simplex releases][3] and [Simfmt releases][4].
-
-## Development and releases
-
-After checking out this repository, workflows can test the unpublished action
-with `uses: ./`. The action implementation is the root `install` script; the
-separate `.github/scripts/simfmt-check` helper is used only for repository
-format checks.
+Supported platforms are determined by the published Simplex release assets.
+The action does not maintain a separate architecture table. 
+See the [Simplex releases][2].
 
 [1]: https://github.com/BlockstreamResearch/smplx
-[2]: https://github.com/BlockstreamResearch/simfmt
-[3]: https://github.com/BlockstreamResearch/smplx/releases
-[4]: https://github.com/BlockstreamResearch/simfmt/releases
+[2]: https://github.com/BlockstreamResearch/smplx/releases
